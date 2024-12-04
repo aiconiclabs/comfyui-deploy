@@ -18,7 +18,18 @@ const nextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
-  transpilePackages: ['nanoid', 'postcss'],
+  webpack: (config, { isServer }) => {
+    if (!isServer) {
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        fs: false,
+      };
+    }
+    return config;
+  },
+  experimental: {
+    esmExternals: 'loose',
+  },
 };
 
 export default withSearch(withMDX(nextConfig));
