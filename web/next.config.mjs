@@ -19,6 +19,15 @@ const nextConfig = {
     ignoreDuringBuilds: true,
   },
   webpack: (config, { isServer }) => {
+    // Force all node_modules to be processed through webpack
+    config.module.rules.push({
+      test: /\.m?js$/,
+      type: 'javascript/auto',
+      resolve: {
+        fullySpecified: false,
+      },
+    });
+
     if (!isServer) {
       config.resolve.fallback = {
         ...config.resolve.fallback,
@@ -28,7 +37,7 @@ const nextConfig = {
     return config;
   },
   experimental: {
-    esmExternals: 'loose',
+    esmExternals: false, // Disable ESM externals completely
   },
 };
 
