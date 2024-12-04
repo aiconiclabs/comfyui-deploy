@@ -18,7 +18,7 @@ const nextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
-  transpilePackages: ['nanoid'],
+  transpilePackages: ['nanoid', 'postcss'],
 };
 
 export default withSearch(withMDX(nextConfig));
