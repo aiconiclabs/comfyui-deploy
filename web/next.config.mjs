@@ -18,6 +18,7 @@ const nextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
+  transpilePackages: ['nanoid'],
 };
 
 export default withSearch(withMDX(nextConfig));
