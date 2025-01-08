@@ -11,7 +11,7 @@ import { registerGetAuthResponse } from "@/routes/registerGetAuthResponse";
 import { registerGetWorkflowRoute } from "@/routes/registerGetWorkflow";
 import { cors } from "hono/cors";
 export const dynamic = "force-dynamic";
-export const maxDuration = 300; // 5 minutes
+export const maxDuration = 60; // 5 minutes
 
 declare module "hono" {
   interface ContextVariableMap {

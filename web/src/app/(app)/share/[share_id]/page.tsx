@@ -22,7 +22,7 @@ import { auth, clerkClient } from "@clerk/nextjs/server";
 import { eq } from "drizzle-orm";
 import { redirect } from "next/navigation";
 
-export const maxDuration = 300; // 5 minutes
+export const maxDuration = 60; // 5 minutes
 
 export default async function Page({
 	params,
@@ -48,10 +48,10 @@ export default async function Page({
 
 	const userName = sharedDeployment.workflow.org_id
 		? await clerkClient.organizations
-				.getOrganization({
-					organizationId: sharedDeployment.workflow.org_id,
-				})
-				.then((x) => x.name)
+			.getOrganization({
+				organizationId: sharedDeployment.workflow.org_id,
+			})
+			.then((x) => x.name)
 		: sharedDeployment.user.name;
 
 	const inputs = getInputsFromWorkflow(sharedDeployment.version);
