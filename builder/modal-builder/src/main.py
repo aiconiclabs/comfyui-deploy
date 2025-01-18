@@ -481,63 +481,8 @@ async def build_logic(item: Item):
     if item.machine_id in machine_logs_cache:
         del machine_logs_cache[item.machine_id]
 
-    logger.info("Starting to process Modal deployment output...")
-    stdout, stderr = await process.communicate()
-    stdout_str = stdout.decode() if stdout else ""
-    stderr_str = stderr.decode() if stderr else ""
-    
-    logger.info("=== START OF MODAL DEPLOYMENT OUTPUT ===")
-    logger.info(f"STDOUT:\n{stdout_str}")
-    logger.info(f"STDERR:\n{stderr_str}")
-    logger.info("=== END OF MODAL DEPLOYMENT OUTPUT ===")
-
-    # New URL parsing logic with verbose logging
-    url = None
-    logger.info("Starting URL parsing...")
-    
-    lines = stdout_str.split('\n')
-    logger.info(f"Found {len(lines)} lines to parse")
-    
-    for i, line in enumerate(lines):
-        logger.info(f"Parsing line {i + 1}: '{line}'")
-        
-        if 'Created web function comfyui_app =>' in line:
-            url = line.split('=>')[-1].strip()
-            logger.info(f"✓ Found web function URL: {url}")
-            break
-        elif '-comfyui-app.modal.run' in line:
-            url = line.strip()
-            logger.info(f"✓ Found modal.run URL: {url}")
-            break
-        else:
-            logger.info(f"✗ No URL match in this line")
-
-    if not url:
-        logger.info("No URL found in output, using fallback...")
-        url = f"https://aiconiclabs--{item.machine_id}-comfyui-app.modal.run"
-        logger.info(f"Fallback URL: {url}")
-
-    if process.returncode == 0:
-        logger.info(f"Deployment successful. Final URL: {url}")
-        requests.post(item.callback_url, json={
-            "machine_id": item.machine_id,
-            "endpoint": url,
-            "build_log": json.dumps(machine_logs)
-        })
-        logger.info("Callback request sent")
-        
-        return {
-            "status": "success",
-            "url": url,
-            "machine_id": item.machine_id
-        }
-    else:
-        logger.error(f"Deployment failed with return code {process.returncode}")
-        return {
-            "status": "error",
-            "error": f"Deployment failed: {stderr_str}",
-            "machine_id": item.machine_id
-        }
+    logger.info("done")
+    logger.info(url)
 
 
 def start_loop(loop):
@@ -551,6 +496,53 @@ def run_in_new_thread(coroutine):
     t.start()
     asyncio.run_coroutine_threadsafe(coroutine, new_loop)
     return t
+
+
+async def process_build_output(process_output):
+    url = None
+    app_name = None
+    function_name = "comfyui-app"
+    
+    for line in process_output.split('\n'):
+        # Look for the app name in the initialization message
+        if "Modal app created successfully with name:" in line:
+            try:
+                app_name = line.split("Modal app created successfully with name:")[1].strip()
+                logger.info(f"Found app name: {app_name}")
+            except Exception as e:
+                logger.error(f"Error parsing app name: {e}")
+        
+        # Alternative way to get app name from the App URL log
+        if "App URL:" in line:
+            try:
+                url_part = line.split("App URL:")[1].strip()
+                if "None" not in url_part:
+                    url = url_part
+                    logger.info(f"Found direct URL: {url}")
+                    return url
+            except Exception as e:
+                logger.error(f"Error parsing direct URL: {e}")
+    
+    # If we have an app name but no direct URL, construct the URL
+    if app_name and not url:
+        constructed_url = f"https://{app_name}--{function_name}.modal.run"
+        logger.info(f"Constructed URL from app name: {constructed_url}")
+        return constructed_url
+    
+    # If we still don't have a URL, try to find it in deployment message
+    if not url:
+        for line in process_output.split('\n'):
+            if "View Deployment:" in line:
+                try:
+                    url = line.split("View Deployment:")[1].strip()
+                    logger.info(f"Found deployment URL: {url}")
+                    if url and "None" not in url:
+                        return url
+                except Exception as e:
+                    logger.error(f"Error parsing deployment URL: {e}")
+    
+    logger.error("Could not find or construct valid URL")
+    return None
 
 
 if __name__ == "__main__":
