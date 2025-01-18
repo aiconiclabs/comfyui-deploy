@@ -313,7 +313,7 @@ async def build_logic(item: Item):
         "name": item.name,
         "deploy_test": os.environ.get("DEPLOY_TEST_FLAG", "False"),
         "gpu": item.gpu,
-        "civitai_token": os.environ.get("CIVITAI_TOKEN", "")
+        "civitai_token": os.environ.get("CIVITAI_TOKEN", "86449d8a009eca2988f5b81434ee44d9")
     }
     with open(f"{folder_path}/config.py", "w") as f:
         f.write("config = " + json.dumps(config))
@@ -481,8 +481,63 @@ async def build_logic(item: Item):
     if item.machine_id in machine_logs_cache:
         del machine_logs_cache[item.machine_id]
 
-    logger.info("done")
-    logger.info(url)
+    logger.info("Starting to process Modal deployment output...")
+    stdout, stderr = await process.communicate()
+    stdout_str = stdout.decode() if stdout else ""
+    stderr_str = stderr.decode() if stderr else ""
+    
+    logger.info("=== START OF MODAL DEPLOYMENT OUTPUT ===")
+    logger.info(f"STDOUT:\n{stdout_str}")
+    logger.info(f"STDERR:\n{stderr_str}")
+    logger.info("=== END OF MODAL DEPLOYMENT OUTPUT ===")
+
+    # New URL parsing logic with verbose logging
+    url = None
+    logger.info("Starting URL parsing...")
+    
+    lines = stdout_str.split('\n')
+    logger.info(f"Found {len(lines)} lines to parse")
+    
+    for i, line in enumerate(lines):
+        logger.info(f"Parsing line {i + 1}: '{line}'")
+        
+        if 'Created web function comfyui_app =>' in line:
+            url = line.split('=>')[-1].strip()
+            logger.info(f"✓ Found web function URL: {url}")
+            break
+        elif '-comfyui-app.modal.run' in line:
+            url = line.strip()
+            logger.info(f"✓ Found modal.run URL: {url}")
+            break
+        else:
+            logger.info(f"✗ No URL match in this line")
+
+    if not url:
+        logger.info("No URL found in output, using fallback...")
+        url = f"https://aiconiclabs--{item.machine_id}-comfyui-app.modal.run"
+        logger.info(f"Fallback URL: {url}")
+
+    if process.returncode == 0:
+        logger.info(f"Deployment successful. Final URL: {url}")
+        requests.post(item.callback_url, json={
+            "machine_id": item.machine_id,
+            "endpoint": url,
+            "build_log": json.dumps(machine_logs)
+        })
+        logger.info("Callback request sent")
+        
+        return {
+            "status": "success",
+            "url": url,
+            "machine_id": item.machine_id
+        }
+    else:
+        logger.error(f"Deployment failed with return code {process.returncode}")
+        return {
+            "status": "error",
+            "error": f"Deployment failed: {stderr_str}",
+            "machine_id": item.machine_id
+        }
 
 
 def start_loop(loop):

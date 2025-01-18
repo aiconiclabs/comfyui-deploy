@@ -7,6 +7,7 @@ import urllib.parse
 from pydantic import BaseModel
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
+from pathlib import Path
 
 # deploy_test = False
 
@@ -30,52 +31,75 @@ print("deploy_test ", deploy_test)
 stub = Stub(name=config["name"])
 # print(stub.app_id)
 
-if not deploy_test:
-    # dockerfile_image = Image.from_dockerfile(f"{current_directory}/Dockerfile", context_mount=Mount.from_local_dir(f"{current_directory}/data", remote_path="/data"))
-    # dockerfile_image = Image.from_dockerfile(f"{current_directory}/Dockerfile", context_mount=Mount.from_local_dir(f"{current_directory}/data", remote_path="/data"))
+print("Starting Modal app initialization...")
+print(f"Using config name: {config['name']}")
 
-    dockerfile_image = (
-        modal.Image.debian_slim()
-        .env({
-            "CIVITAI_TOKEN": config["civitai_token"],
-        })
-        .apt_install("git", "wget")
-        .pip_install(
-            "git+https://github.com/modal-labs/asgiproxy.git", "httpx", "tqdm"
+try:
+    # Get the root directory (two levels up from template/app.py)
+    root_dir = Path(__file__).parent.parent.parent
+    requirements_path = root_dir / "requirements.txt"
+    
+    print(f"Using requirements from: {requirements_path}")
+
+    # Define base image with dependencies from requirements.txt
+    image = (Image.debian_slim()
+            .pip_install_from_requirements(requirements_path))
+    
+    print("Base image configured with dependencies from requirements.txt")
+
+    if not deploy_test:
+        dockerfile_image = (
+            image  # Use the base image with dependencies
+            .env({
+                "CIVITAI_TOKEN": config["civitai_token"],
+            })
+            .apt_install("git", "wget")
+            .pip_install(
+                "git+https://github.com/modal-labs/asgiproxy.git", "httpx", "tqdm"
+            )
+            .apt_install("libgl1-mesa-glx", "libglib2.0-0")
+            .run_commands(
+                # Basic comfyui setup
+                "git clone https://github.com/comfyanonymous/ComfyUI.git /comfyui",
+                "cd /comfyui && pip install xformers!=0.0.18 -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu121",
+
+                # Install comfyui manager
+                "cd /comfyui/custom_nodes && git clone https://github.com/ltdrdata/ComfyUI-Manager.git",
+                "cd /comfyui/custom_nodes/ComfyUI-Manager && git reset --hard 9c86f62b912f4625fe2b929c7fc61deb9d16f6d3",
+                "cd /comfyui/custom_nodes/ComfyUI-Manager && pip install -r requirements.txt",
+                "cd /comfyui/custom_nodes/ComfyUI-Manager && mkdir startup-scripts",
+            )
+            .copy_local_file(f"{current_directory}/data/start.sh", "/start.sh")
+            .run_commands("chmod +x /start.sh")
+
+            # Restore the custom nodes first
+            .copy_local_file(f"{current_directory}/data/restore_snapshot.py", "/")
+            .copy_local_file(f"{current_directory}/data/snapshot.json", "/comfyui/custom_nodes/ComfyUI-Manager/startup-scripts/restore-snapshot.json")
+            .run_commands("python restore_snapshot.py")
+
+            # Then install the models
+            .copy_local_file(f"{current_directory}/data/install_deps.py", "/")
+            .copy_local_file(f"{current_directory}/data/models.json", "/")
+            .copy_local_file(f"{current_directory}/data/deps.json", "/")
+
+            .run_commands("python install_deps.py")
         )
-        .apt_install("libgl1-mesa-glx", "libglib2.0-0")
-        .run_commands(
-            # Basic comfyui setup
-            "git clone https://github.com/comfyanonymous/ComfyUI.git /comfyui",
-            "cd /comfyui && pip install xformers!=0.0.18 -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu121",
+    
+    target_image = image if deploy_test else dockerfile_image
+    print(f"Images configured successfully")
 
-            # Install comfyui manager
-            "cd /comfyui/custom_nodes && git clone https://github.com/ltdrdata/ComfyUI-Manager.git",
-            "cd /comfyui/custom_nodes/ComfyUI-Manager && git reset --hard 9c86f62b912f4625fe2b929c7fc61deb9d16f6d3",
-            "cd /comfyui/custom_nodes/ComfyUI-Manager && pip install -r requirements.txt",
-            "cd /comfyui/custom_nodes/ComfyUI-Manager && mkdir startup-scripts",
-        )
-        # .run_commands(
-        #     # Install comfy deploy
-        #     "cd /comfyui/custom_nodes && git clone https://github.com/BennyKok/comfyui-deploy.git",
-        # )
-        # .copy_local_file(f"{current_directory}/data/extra_model_paths.yaml", "/comfyui")
-
-        .copy_local_file(f"{current_directory}/data/start.sh", "/start.sh")
-        .run_commands("chmod +x /start.sh")
-
-        # Restore the custom nodes first
-        .copy_local_file(f"{current_directory}/data/restore_snapshot.py", "/")
-        .copy_local_file(f"{current_directory}/data/snapshot.json", "/comfyui/custom_nodes/ComfyUI-Manager/startup-scripts/restore-snapshot.json")
-        .run_commands("python restore_snapshot.py")
-
-        # Then install the models
-        .copy_local_file(f"{current_directory}/data/install_deps.py", "/")
-        .copy_local_file(f"{current_directory}/data/models.json", "/")
-        .copy_local_file(f"{current_directory}/data/deps.json", "/")
-
-        .run_commands("python install_deps.py")
+    # Create Modal app instance
+    app = modal.App(
+        name=config["name"]
     )
+    print(f"Modal app created successfully with name: {config['name']}")
+
+except Exception as e:
+    print(f"CRITICAL ERROR in Modal app initialization: {str(e)}")
+    print(f"Config used: {config}")
+    import traceback
+    print(f"Full traceback:\n{traceback.format_exc()}")
+    raise
 
 # Time to wait between API check attempts in milliseconds
 COMFY_API_AVAILABLE_INTERVAL_MS = 50
@@ -152,13 +176,14 @@ class RequestInput(BaseModel):
     input: Input
 
 
-image = Image.debian_slim()
-
-target_image = image if deploy_test else dockerfile_image
-
-
-@stub.function(image=target_image, gpu=config["gpu"])
+# Define your functions with app decorators
+@app.function(
+    image=target_image, 
+    gpu=config["gpu"],
+    allow_concurrent_inputs=100
+)
 def run(input: Input):
+    print(f"Running function with input: {input}")
     import subprocess
     import time
     # Make sure that the ComfyUI API is available
@@ -239,9 +264,10 @@ async def bar(request_input: RequestInput):
     # pass
 
 
-@stub.function(image=image)
+@app.function(image=image)
 @asgi_app()
 def comfyui_api():
+    print("Initializing comfyui_api")
     return web_app
 
 
@@ -280,18 +306,16 @@ def spawn_comfyui_in_background():
                 )
 
 
-@stub.function(
+@app.function(
     image=target_image,
     gpu=config["gpu"],
-    # Allows 100 concurrent requests per container.
     allow_concurrent_inputs=100,
-    # Restrict to 1 container because we want to our ComfyUI session state
-    # to be on a single container.
     concurrency_limit=1,
     timeout=10 * 60,
 )
 @asgi_app()
 def comfyui_app():
+    print("Initializing comfyui_app")
     from asgiproxy.config import BaseURLProxyConfigMixin, ProxyConfig
     from asgiproxy.context import ProxyContext
     from asgiproxy.simple_proxy import make_simple_proxy_app
@@ -308,3 +332,5 @@ def comfyui_app():
     )()
 
     return make_simple_proxy_app(ProxyContext(config))
+
+print(f"Modal functions defined successfully for app: {config['name']}")
